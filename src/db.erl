@@ -1,4 +1,5 @@
 -module (db).
+-include("types.hrl").
 
 -behaviour (supervisor).
 
@@ -66,7 +67,7 @@ transaction(Fun) ->
 fetch_column_by(ColumnSpec, Filter) ->
   fetch_column_by(ColumnSpec, Filter, []).
 
--spec fetch_column_by(column_spec(), filter(), list()) -> {ok, list()}.
+-spec fetch_column_by(column_spec(), filter(), plist()) -> {ok, list()}.
 fetch_column_by(ColumnSpec, Filter, Extra) ->
   db_transactor:transaction(
     fun(Worker) ->
@@ -74,15 +75,15 @@ fetch_column_by(ColumnSpec, Filter, Extra) ->
     end,
     ?TIMEOUT).
 
--spec fetch_multiple_columns_by(column_spec(), filter()) -> {ok, [list()]}.
+-spec fetch_multiple_columns_by(column_spec(), filter()) -> {ok, [plist()]}.
 fetch_multiple_columns_by(ColumnSpec, Filter) ->
   fetch_multiple_columns_by(ColumnSpec, Filter, [], ?TIMEOUT).
 
--spec fetch_multiple_columns_by(column_spec(), filter(), list()) -> {ok, list()}.
+-spec fetch_multiple_columns_by(column_spec(), filter(), plist()) -> {ok, list()}.
 fetch_multiple_columns_by(ColumnSpec, Filter, Extra) ->
   fetch_multiple_columns_by(ColumnSpec, Filter, Extra, ?TIMEOUT).
 
--spec fetch_multiple_columns_by(column_spec(), filter(), list(), integer()) -> {ok, list()}.
+-spec fetch_multiple_columns_by(column_spec(), filter(), plist(), integer()) -> {ok, list()}.
 fetch_multiple_columns_by(ColumnSpec, Filter, Extra, Timeout) ->
   db_transactor:transaction(
     fun(Worker) ->
@@ -90,11 +91,11 @@ fetch_multiple_columns_by(ColumnSpec, Filter, Extra, Timeout) ->
     end,
     Timeout).
 
--spec fetch_raw(binary()) -> {ok, list()}.
+-spec fetch_raw(binary()) -> {ok, plist()}.
 fetch_raw(Query) ->
   fetch_raw(Query, ?TIMEOUT).
 
--spec fetch_raw(binary(), integer()) -> {ok, list()}.
+-spec fetch_raw(binary(), integer()) -> {ok, plist()}.
 fetch_raw(Query, Timeout) ->
   db_transactor:transaction(
     fun(Worker) ->
@@ -102,7 +103,7 @@ fetch_raw(Query, Timeout) ->
     end,
     Timeout).
 
--spec find_all_by(table(), filter()) -> {ok, [list()]}.
+-spec find_all_by(table(), filter()) -> {ok, [plist()]}.
 find_all_by(Table, Filter) ->
   db_transactor:transaction(
     fun(Worker) ->
@@ -110,7 +111,7 @@ find_all_by(Table, Filter) ->
     end,
     ?TIMEOUT).
 
--spec find_one_by(table(), filter()) -> {ok, list()} | {error, not_found}.
+-spec find_one_by(table(), filter()) -> {ok, plist()} | {error, not_found}.
 find_one_by(Table, Filter) ->
   db_transactor:transaction(
     fun(Worker) ->
@@ -126,7 +127,7 @@ update(Filter, Values) ->
     end,
     ?TIMEOUT).
 
--spec insert(table(), values(), returns()) -> ok | {ok, list()}.
+-spec insert(table(), values(), returns()) -> ok | {ok, plist()}.
 insert(Table, Values, Returns) ->
   db_transactor:transaction(
     fun(Worker) ->
@@ -151,13 +152,13 @@ delete(Table, Filter) ->
 delete(Worker, Table, Filter) ->
   db_worker:delete(Worker, Table, filter_deleted(Table, Filter), ?TIMEOUT).
 
--spec fetch_column_by(worker(), column_spec(), filter(), list()) -> {ok, list()}.
+-spec fetch_column_by(worker(), column_spec(), filter(), plist()) -> {ok, list()}.
 fetch_column_by(Worker, ColumnSpec, Filter, Extra) ->
   {Table, _} = ColumnSpec,
   FilterWithDeleted = filter_deleted(Table, Filter),
   db_worker:fetch_column_by(Worker, ColumnSpec, FilterWithDeleted, Extra, ?TIMEOUT).
 
--spec fetch_multiple_columns_by(worker(), column_spec(), filter(), list(), integer()) -> {ok, list()}.
+-spec fetch_multiple_columns_by(worker(), column_spec(), filter(), plist(), integer()) -> {ok, list()}.
 fetch_multiple_columns_by(Worker, ColumnSpec, Filter, Extra, Timeout) ->
   Table = case ColumnSpec of
     {T, _} -> T;
@@ -167,12 +168,12 @@ fetch_multiple_columns_by(Worker, ColumnSpec, Filter, Extra, Timeout) ->
   db_worker:fetch_multiple_columns_by(Worker, ColumnSpec, FilterWithDeleted, Extra, Timeout).
 
 
--spec find_all_by(worker(), table(), filter()) -> {ok, [list()]}.
+-spec find_all_by(worker(), table(), filter()) -> {ok, [plist()]}.
 find_all_by(Worker, Table, Filter) ->
   FilterWithDeleted = filter_deleted(Table, Filter),
   db_worker:find_all_by(Worker, Table, FilterWithDeleted, ?TIMEOUT).
 
--spec find_one_by(worker(), table(), filter()) -> {ok, list()} | {error, not_found}.
+-spec find_one_by(worker(), table(), filter()) -> {ok, plist()} | {error, not_found}.
 find_one_by(Worker, Table, Filter) ->
   FilterWithDeleted = filter_deleted(Table, Filter),
   db_worker:find_one_by(Worker, Table, FilterWithDeleted, ?TIMEOUT).
@@ -186,7 +187,7 @@ update(Worker, {Table, Filter}, Values) ->
   FilterWithDeleted = filter_deleted(Table, Filter),
   db_worker:update(Worker, {Table, FilterWithDeleted}, Values ++ timestamps(Table, update), ?TIMEOUT).
 
--spec insert(worker(), table(), values(), returns()) -> ok | {ok, list()}.
+-spec insert(worker(), table(), values(), returns()) -> ok | {ok, plist()}.
 insert(Worker, Table, Values, Returns) ->
   db_worker:insert(
     Worker,
@@ -197,60 +198,75 @@ insert(Worker, Table, Values, Returns) ->
 
 -type action() :: insert | update.
 -spec timestamps(table(), action()) -> [{atom(), term()}].
-timestamps(doctrine_migration_versions, _) -> [];
-timestamps(geoip, _) -> [];
-timestamps(statistic, _) -> [];
-timestamps(events, _) -> [];
-timestamps(ads, _) -> [];
-timestamps(user_groups, insert) ->
-  [{delete_timestamp, {{1970,1,1},{0,0,0}}}];
-timestamps(user_groups, update) -> [];
-timestamps(user_usergroup, _) -> [];
-timestamps(NonSoftDeletable, insert)
-  when NonSoftDeletable == purchases;
-       NonSoftDeletable == restrictions;
-       NonSoftDeletable == user_subscriptions ->
-  [
-    {create_timestamp, calendar:universal_time()},
-    {update_timestamp, calendar:universal_time()}
-  ];
-timestamps(_, insert) ->
-  [
-    {create_timestamp, calendar:universal_time() },
-    {update_timestamp, calendar:universal_time() },
-    {delete_timestamp, {{1970,1,1},{0,0,0}}}
-  ];
-timestamps(_, update) ->
-  [{update_timestamp, calendar:universal_time()}].
+timestamps(Table, Action) ->
+  case {is_timestampable(Table), Action} of 
+    {true, insert} ->
+      [
+        {create_timestamp, calendar:universal_time()},
+        {update_timestamp, calendar:universal_time()}
+      ];
+    {true, update} ->
+      [{update_timestamp, calendar:universal_time()}];
+    {false, _} ->
+      []
+  end ++
+  case {is_soft_deletable(Table), Action} of
+    {true, insert} ->
+      [{delete_timestamp, {{1970,1,1},{0,0,0}}}];
+    _ -> []
+  end.
+
+
+is_timestampable(Table) when
+  Table == devices;
+  Table == items;
+  Table == lists;
+  Table == product_groups;
+  Table == purchases; 
+  Table == restrictions; 
+  Table == send_plans;
+  Table == subscribtions;
+  Table == unique_items;
+  Table == user_subscriptions; 
+  Table == users 
+  -> true;
+is_timestampable(_) -> false.
+
+is_soft_deletable(Table) when 
+  Table == devices;
+  Table == items;
+  Table == lists;
+  Table == product_groups;
+  Table == send_plans;
+  Table == subscribtions;
+  Table == unique_items;
+  Table == user_groups; 
+  Table == users 
+  -> true;
+is_soft_deletable(_) -> false.
 
 -spec filter_deleted(table(), filter()) -> filter().
-filter_deleted(device_app_ids, Filter) -> Filter;
-filter_deleted(doctrine_migration_versions, Filter) -> Filter;
-filter_deleted(user_usergroup, Filter) -> Filter;
-filter_deleted(statistic, Filter) -> Filter;
-filter_deleted(events, Filter) -> Filter;
-filter_deleted(geoip, Filter) -> Filter;
-filter_deleted(ads, Filter) -> Filter;
-filter_deleted(user_subscriptions, Filter) -> Filter;
-filter_deleted(restrictions, Filter) -> Filter;
-filter_deleted(purchases, Filter) -> Filter;
 filter_deleted({Table, join, OtherTable, on, _Cond}, Filter) ->
   filter_deleted(OtherTable, filter_deleted(Table, Filter));
 filter_deleted(Table, Filter) ->
-  case proplists:get_value(delete_timestamp, Filter) of
-    undefined ->
-      IdFilter = lists:any(
-        fun({id,_}) -> true;
-           ({{_, id}, _}) -> true;
-           (_) -> false
-        end,
-        Filter),
-      case IdFilter of
-        true -> Filter;
-        false -> [{{Table,delete_timestamp}, '=', {{1970,1,1},{0,0,0}}}] ++ Filter
+  case is_soft_deletable(Table) of
+    true ->
+      case lists2:keyfind(delete_timestamp, Filter) of
+        undefined ->
+          IdFilter = lists:any(
+            fun({id,_}) -> true;
+               ({{_, id}, _}) -> true;
+               (_) -> false
+            end,
+            Filter),
+          case IdFilter of
+            true -> Filter;
+            false -> [{{Table,delete_timestamp}, '=', {{1970,1,1},{0,0,0}}}] ++ Filter
+          end;
+        no_filter -> proplists:delete(delete_timestamp, Filter);
+        _ -> Filter
       end;
-    no_filter -> proplists:delete(delete_timestamp, Filter);
-    _ -> Filter
+    false -> Filter
   end.
 
 equery(Query, Params, Timeout) ->
