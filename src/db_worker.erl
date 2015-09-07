@@ -1,5 +1,4 @@
 -module(db_worker).
--include("types.hrl").
 -include_lib("epgsql/include/epgsql.hrl").
 -behaviour(poolboy_worker).
 -behaviour(gen_server).
@@ -35,7 +34,7 @@ init(Args) ->
     {error, Err} -> {stop, {connection_failed, Err}}
   end.
 
--spec insert(db:worker(), db:table(), db:values(), db:returns(), integer()) -> ok | {ok, plist()}.
+-spec insert(db:worker(), db:table(), db:values(), db:returns(), integer()) -> ok | {ok, list()}.
 insert(Worker, Table, Values, Returns, Timeout) ->
   {Arguments, Params} = prepare_params(Values),
   Query = case Returns of
@@ -70,7 +69,7 @@ delete(Worker, Table, Filter, Timeout) ->
   {ok, _N} = equery(Worker, Query, WhereParams, Timeout),
   ok.
 
--spec fetch_column_by(db:worker(), db:column_spec(), db:filter(), plist(), integer()) -> {ok, list()}.
+-spec fetch_column_by(db:worker(), db:column_spec(), db:filter(), list(), integer()) -> {ok, list()}.
 fetch_column_by(Worker, {Table, Column}, Filter, Extra, Timeout) when is_atom(Column); is_tuple(Column) ->
   {Where, WhereParams} = prepare_filters(Filter),
   ExtraQ = case Extra of [] -> []; _ -> [Extra] end,
@@ -78,7 +77,7 @@ fetch_column_by(Worker, {Table, Column}, Filter, Extra, Timeout) when is_atom(Co
   Result = equery(Worker, Query, WhereParams, Timeout),
   parse_scalar_result_list(Result).
 
--spec fetch_multiple_columns_by(db:worker(), db:column_spec(), db:filter(), plist(), integer()) -> {ok, plist()}.
+-spec fetch_multiple_columns_by(db:worker(), db:column_spec(), db:filter(), list(), integer()) -> {ok, list()}.
 fetch_multiple_columns_by(Worker, {Table, Columns}, Filter, Extra, Timeout) when is_list(Columns) ->
   fetch_multiple_columns_by(Worker, {Table, undefined, Columns}, Filter, Extra, Timeout);
 fetch_multiple_columns_by(Worker, {Table, Modifier, Columns}, Filter, Extra, Timeout) when is_list(Columns) ->
@@ -88,21 +87,21 @@ fetch_multiple_columns_by(Worker, {Table, Modifier, Columns}, Filter, Extra, Tim
   Result = equery(Worker, Query, WhereParams, Timeout),
   parse_result_list(Result).
 
--spec find_all_by(db:worker(), db:table(), db:filter(), integer()) -> {ok, [plist()]}.
+-spec find_all_by(db:worker(), db:table(), db:filter(), integer()) -> {ok, [list()]}.
 find_all_by(Worker, Table, Filter, Timeout) ->
   {Where, WhereParams} = prepare_filters(Filter),
   Query = {select, '*', {from, Table}, {where, Where}},
   Result = equery(Worker, Query, WhereParams, Timeout),
   parse_result_list(Result).
 
--spec find_one_by(db:worker(), db:table(), db:filter(), integer()) -> {error, not_found} | {ok, [plist()]}.
+-spec find_one_by(db:worker(), db:table(), db:filter(), integer()) -> {error, not_found} | {ok, [list()]}.
 find_one_by(Worker, Table, Filter, Timeout) ->
   {Where, WhereParams} = prepare_filters(Filter),
   Query = {select, '*', {from, Table}, {where, Where}, {limit, 1}},
   Result = equery(Worker, Query, WhereParams, Timeout),
   parse_result(Result).
 
--spec fetch_raw(db:worker(), binary(), integer()) -> {ok, plist()}.
+-spec fetch_raw(db:worker(), binary(), integer()) -> {ok, list()}.
 fetch_raw(Worker, Query, Timeout) ->
   Result = equery(Worker, Query, [], Timeout),
   parse_result_list(Result).
@@ -111,7 +110,7 @@ fetch_raw(Worker, Query, Timeout) ->
                         {ok, [#column{}], [tuple()]} |
                         {ok, integer(), [#column{}], [tuple()]} |
                         {error, #error{}}.
--spec parse_result(equery_result()) -> ok | {error, not_found} | {ok, plist()}.
+-spec parse_result(equery_result()) -> ok | {error, not_found} | {ok, list()}.
 parse_result({error, Err}) ->
   error({db_error, Err});
 parse_result({ok, _Count}) ->
@@ -124,7 +123,7 @@ parse_result({ok, Columns, [FirstRow | _]}) ->
   {ok, [Result | _]} = parse_result_list({ok, Columns, [FirstRow]}),
   {ok, Result}.
 
--spec parse_result_list(equery_result()) -> ok | {ok, [plist()]}.
+-spec parse_result_list(equery_result()) -> ok | {ok, [list()]}.
 parse_result_list({error, Err}) ->
   lager:error("Error in parse ~p~n", [Err]),
   error(Err);
@@ -153,10 +152,10 @@ parse_scalar_result_list({error, Err}) ->
   error(Err).
 
 
--spec prepare_params(db:values()) -> {plist(), list()}.
+-spec prepare_params(db:values()) -> {list(), list()}.
 prepare_params(Values) ->
   prepare_params(Values, 0).
--spec prepare_params(db:values(), integer()) -> {plist(), list()}.
+-spec prepare_params(db:values(), integer()) -> {list(), list()}.
 prepare_params(Values, StartNumber) ->
   {InParams, NotInParams} = lists:partition(
     fun({_, {call, _, _}}) -> false;
