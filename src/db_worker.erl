@@ -1,5 +1,5 @@
 -module(db_worker).
--include_lib("epgsql/include/epgsql.hrl").
+% -include_lib("epgsql/include/epgsql.hrl").
 -behaviour(poolboy_worker).
 -behaviour(gen_server).
 -define(CONNECTION_TIMEOUT, 5000).
@@ -17,20 +17,27 @@ start_link(Args) ->
   gen_server:start_link(?MODULE, Args, []).
 
 init(Args) ->
-  Host = lists2:keyfind(host, Args),
-  Port = case lists2:keyfind(port, Args) of
+  Host = proplists:get_value(host, Args),
+  Port = case proplists:get_value(port, Args) of
     undefined -> 5432;
     P when is_integer(P) -> P;
     [] -> 5432;
     P when is_list(P) -> list_to_integer(P);
     P when is_binary(P) -> binary_to_integer(P)
   end,
-  User = lists2:keyfind(user, Args),
-  Password = lists2:keyfind(password, Args),
-  Database = lists2:keyfind(dbname, Args),
-  Timeout = lists2:keyfind(timeout, Args, ?CONNECTION_TIMEOUT),
-  case epgsql:connect(Host, User, Password, [{port, Port},{database, Database}, {timeout, Timeout}]) of
-    {ok, Conn} -> {ok, #state{conn=Conn}};
+  User = proplists:get_value(user, Args),
+  Password = proplists:get_value(password, Args),
+  Database = proplists:get_value(dbname, Args),
+  % Timeout = proplists:get_value(timeout, Args, ?CONNECTION_TIMEOUT),
+
+  case pgsql_connection:start_link([
+      {host, Host}, 
+      {port, Port},
+      {database, Database}, 
+      {user, User}, 
+      {password, Password}, 
+      {reconnect, false}]) of
+    {ok, Conn} -> {ok, #state{conn = Conn}};
     {error, Err} -> {stop, {connection_failed, Err}}
   end.
 
@@ -85,72 +92,71 @@ fetch_multiple_columns_by(Worker, {Table, Modifier, Columns}, Filter, Extra, Tim
   ExtraQ = case Extra of [] -> []; _ -> [Extra] end,
   Query = list_to_tuple([select, Modifier, Columns, {from, Table}, {where, Where}] ++ ExtraQ),
   Result = equery(Worker, Query, WhereParams, Timeout),
-  parse_result_list(Result).
+  parse_result(Result).
 
 -spec find_all_by(db:worker(), db:table(), db:filter(), integer()) -> {ok, [list()]}.
 find_all_by(Worker, Table, Filter, Timeout) ->
   {Where, WhereParams} = prepare_filters(Filter),
   Query = {select, '*', {from, Table}, {where, Where}},
   Result = equery(Worker, Query, WhereParams, Timeout),
-  parse_result_list(Result).
+  parse_result(Result).
 
 -spec find_one_by(db:worker(), db:table(), db:filter(), integer()) -> {error, not_found} | {ok, [list()]}.
 find_one_by(Worker, Table, Filter, Timeout) ->
   {Where, WhereParams} = prepare_filters(Filter),
   Query = {select, '*', {from, Table}, {where, Where}, {limit, 1}},
   Result = equery(Worker, Query, WhereParams, Timeout),
-  parse_result(Result).
+  case parse_result(Result) of
+    {ok, []} -> {error, not_found};
+    {ok, [R|_]} -> {ok, R};
+    Other -> Other
+  end.
 
 -spec fetch_raw(db:worker(), binary(), integer()) -> {ok, list()}.
 fetch_raw(Worker, Query, Timeout) ->
   Result = equery(Worker, Query, [], Timeout),
-  parse_result_list(Result).
+  parse_result(Result).
 
--type equery_result() :: {ok, integer()} |
-                        {ok, [#column{}], [tuple()]} |
-                        {ok, integer(), [#column{}], [tuple()]} |
-                        {error, #error{}}.
--spec parse_result(equery_result()) -> ok | {error, not_found} | {ok, list()}.
+-type equery_result() :: {ok, pgsql_connection:result_tuple()} | {error, tuple()}.
+-spec parse_result(equery_result()) -> ok | {ok, [list()]}.
 parse_result({error, Err}) ->
   error({db_error, Err});
-parse_result({ok, _Count}) ->
-  ok;
-parse_result({ok, _Columns, []}) ->
-  {error, not_found};
-parse_result({ok, _Count, Columns, Rows}) ->
-  parse_result({ok, Columns, Rows});
-parse_result({ok, Columns, [FirstRow | _]}) ->
-  {ok, [Result | _]} = parse_result_list({ok, Columns, [FirstRow]}),
-  {ok, Result}.
+parse_result({ok, {{insert, _, _}, Fields, Rows}}) ->
+  case Fields of
+    [] -> ok;
+    _ -> parse_rows(Fields, Rows)
+  end;
+parse_result({ok, {{Update, _}, Fields, Rows}}) when Update == update; Update == delete ->
+  case Fields of
+    [] -> ok;
+    _ -> parse_rows(Fields, Rows)
+  end;
+parse_result({ok, {{select, _}, Fields, Rows}}) ->
+  parse_rows(Fields, Rows);
+parse_result({ok, {{Other, _}, _, _}}) 
+    when Other =/= update, Other =/= insert, Other =/= update, Other =/= delete ->
+  ok.
 
--spec parse_result_list(equery_result()) -> ok | {ok, [list()]}.
-parse_result_list({error, Err}) ->
-  lager:error("Error in parse ~p~n", [Err]),
-  error(Err);
-parse_result_list({ok, _Count}) ->
-  ok;
-parse_result_list({ok, _Columns, []}) ->
-  {ok, []};
-parse_result_list({ok, _Count, Columns, Rows}) ->
-  parse_result_list({ok, Columns, Rows});
-parse_result_list({ok, Columns, Rows}) ->
-  ColumnNames = [ list_to_atom(binary_to_list(Name))
-                  || #column{name = Name} <- Columns ],
-  {ok, [ lists:zip(ColumnNames, tuple_to_list(Row)) || Row <- Rows ]}.
+-spec parse_rows([binary()], [tuple()]) -> {ok, [[tuple()]]}.
+parse_rows(Columns, Rows) ->
+  {ok, [ parse_row(Columns, Row) || Row <- Rows ]}.
+
+parse_row(Columns, Row) ->
+  ColumnsAtoms = [ binary_to_atom(Column, utf8) || Column <- Columns ],
+  RowList = lists:map(
+    fun({array, L}) -> L;
+       (Val) -> Val
+    end,
+    tuple_to_list(Row)),
+  lists:zip(ColumnsAtoms, RowList).
 
 -spec parse_scalar_result_list(equery_result()) -> ok | {ok, [term()]}.
-parse_scalar_result_list({ok, _Count}) ->
-  ok;
-parse_scalar_result_list({ok, _Columns, []}) ->
-  {ok, []};
-parse_scalar_result_list({ok, _Count, Columns, Rows}) ->
-  parse_scalar_result_list({ok, Columns, Rows});
-parse_scalar_result_list({ok, _Columns, Rows}) ->
-  {ok, [ Value || {Value} <- Rows ]};
-parse_scalar_result_list({error, Err}) ->
-  lager:error("Error in parse ~p~n", [Err]),
-  error(Err).
-
+parse_scalar_result_list(Result) ->
+  case parse_result(Result) of
+    {ok, Rows} ->
+      {ok, [ Val || [{_, Val}] <- Rows ]};
+    Other -> Other
+  end.
 
 -spec prepare_params(db:values()) -> {list(), list()}.
 prepare_params(Values) ->
@@ -229,31 +235,39 @@ unzip_in_cond(Filter) ->
   }.
 
 equery(Worker, Query, Params, Timeout) when is_binary(Query) ->
-  {Time, Res} = timer:tc(gen_server, call, [Worker, {equery, Query, Params, Timeout}, Timeout]),
+  {_Time, Res} = timer:tc(gen_server, call, [Worker, {equery, Query, Params, Timeout}, Timeout]),
   % lager:error("TIMING DB query ~tp~n took ~tp ms~n trace ~p~n", [Query, Time / 1000, catch error(trace)]),
   case Res of
-    {error, Err} -> lager:error("DB ERROR: ~tp~n In Query ~tp~n Params ~p~n", [Err, Query, Params]);
-    _ -> ok
-  end,
-  Res;
+    {error, Err} -> 
+      lager:error("DB ERROR: ~tp~n In Query ~tp~n Params ~p~n", [Err, Query, Params]),
+      {error, Err};
+    _ ->  
+      {ok, Res}
+  end;
 equery(Worker, Stmt, Params, Timeout) ->
   Query = sqerl:sql(Stmt, true),
   equery(Worker, Query, Params, Timeout).
 
 squery(Worker, Sql, Timeout) ->
   Query = sqerl:sql(Sql, true),
-  gen_server:call(Worker, {squery, Query, Timeout}, Timeout).
+  case gen_server:call(Worker, {squery, Query, Timeout}, Timeout) of
+    {error, Err} ->
+      lager:error("DB ERROR: ~tp~n In Query ~tp~n Params ~p~n", [Err, Query]),
+      {error, Err};
+    Res ->
+      {ok, Res}
+  end.
 
 %% Gen server behaviour
 
 handle_call({squery, Query, Timeout}, _From, #state{conn=Conn}=State) ->
   {ok, Tref} = timer:exit_after(Timeout - 200, connection_hang),
-  Res = epgsql:squery(Conn, Query),
+  Res = pgsql_connection:simple_query(Conn, Query, [], Timeout),
   timer:cancel(Tref),
   {reply, Res, State};
 handle_call({equery, Query, Params, Timeout}, _From, #state{conn=Conn}=State) ->
   {ok, Tref} = timer:exit_after(Timeout - 1000, connection_hang),
-  Res = epgsql:equery(Conn, Query, Params),
+  Res = pgsql_connection:extended_query(Conn, Query, Params, [], Timeout),
   timer:cancel(Tref),
   {reply, Res, State};
 handle_call(_Request, _From, State) ->
@@ -266,7 +280,7 @@ handle_info(_Info, State) ->
   {noreply, State}.
 
 terminate(_Reason, #state{conn=Conn}) ->
-  ok = epgsql:close(Conn),
+  ok = pgsql_connection:close(Conn),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
