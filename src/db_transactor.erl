@@ -29,7 +29,7 @@ transaction(Fun, Timeout) ->
         commit_transaction(Worker, Pid),
         Res
       catch _:Reason ->
-        lager:error("DB ERROR: ~p Backtrace ~p", [Reason, erlang:get_stacktrace()]),
+        lager:error(io_lib:format("DB ERROR: ~p Backtrace ~p", [Reason, erlang:get_stacktrace()])),
         case Reason of
           {connection_hang, _} -> ok;
           _ -> rollback_transaction(Worker, Pid)

@@ -234,12 +234,17 @@ unzip_in_cond(Filter) ->
     OtherFilters
   }.
 
-equery(Worker, Query, Params, Timeout) when is_binary(Query) ->
+equery(Worker, Query, RawParams, Timeout) when is_binary(Query) ->
+  Params = lists:map(
+    fun(Param) when is_list(Param) -> {array, Param};
+       (Other) -> Other
+    end,
+    RawParams),
   {_Time, Res} = timer:tc(gen_server, call, [Worker, {equery, Query, Params, Timeout}, Timeout]),
-  % lager:error("TIMING DB query ~tp~n took ~tp ms~n trace ~p~n", [Query, Time / 1000, catch error(trace)]),
+  % lager:error("TIMING DB query ~tp~n took ~tp ms~n trace ~p~n", [Query, _Time / 1000, catch error(trace)]),
   case Res of
     {error, Err} -> 
-      lager:error("DB ERROR: ~tp~n In Query ~tp~n Params ~p~n", [Err, Query, Params]),
+      lager:error(io_lib:format("DB ERROR: ~tp~n In Query ~tp~n Params ~p~n", [Err, Query, Params])),
       {error, Err};
     _ ->  
       {ok, Res}
@@ -252,7 +257,7 @@ squery(Worker, Sql, Timeout) ->
   Query = sqerl:sql(Sql, true),
   case gen_server:call(Worker, {squery, Query, Timeout}, Timeout) of
     {error, Err} ->
-      lager:error("DB ERROR: ~tp~n In Query ~tp~n Params ~p~n", [Err, Query]),
+      lager:error(io_lib:format("DB ERROR: ~tp~n In Query ~tp~n", [Err, Query])),
       {error, Err};
     Res ->
       {ok, Res}
