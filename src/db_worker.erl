@@ -29,7 +29,8 @@ init(Args) ->
   Password = lists2:keyfind(password, Args),
   Database = lists2:keyfind(dbname, Args),
   Timeout = lists2:keyfind(timeout, Args, ?CONNECTION_TIMEOUT),
-  case epgsql:connect(Host, User, Password, [{port, Port},{database, Database}, {timeout, Timeout}]) of
+  SSL = lists2:keyfind(ssl, Args, false),
+  case epgsql:connect(Host, User, Password, [{port, Port},{database, Database}, {timeout, Timeout}, {ssl, SSL}]) of
     {ok, Conn} -> {ok, #state{conn=Conn}};
     {error, Err} -> {stop, {connection_failed, Err}}
   end.
