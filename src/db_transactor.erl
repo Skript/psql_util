@@ -51,7 +51,7 @@ get_worker(Pid) ->
 
 -spec begin_transaction(pid(), integer()) -> pid().
 begin_transaction(Pid, Timeout) ->
-  Worker = poolboy:checkout(?POOL_NAME, true, 1000),
+  Worker = poolboy:checkout(?POOL_NAME, true, 10000),
   db_worker:squery(Worker, 'begin', Timeout),
   gen_server:call(?MODULE, {'begin', Pid, Worker, Timeout}).
 
